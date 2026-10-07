@@ -4,7 +4,18 @@ A personal project-management and task-scheduling app in a single, self-containe
 
 ## Open it
 
-Download `command-center-offline.html` and open it in Chrome or Edge. No install, server or build step is needed.
+Download `index.html` and open it in Chrome or Edge. No install, server or build step is needed.
+
+## Host it on Vercel
+
+The app is a static file, so Vercel serves `index.html` at `/` with no build:
+
+- Framework Preset: **Other**
+- Build Command: none (leave empty)
+- Output Directory: no override
+- Root Directory: leave blank
+
+Data is per browser and per address, so the Vercel site starts empty. Export a backup from **Data & backup** in the copy you use now, then import it on the Vercel site.
 
 Voice input, the spoken morning briefing and AI mode work only when the file is opened from your own computer (not inside a sandboxed preview).
 
