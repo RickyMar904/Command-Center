@@ -1,0 +1,16 @@
+{
+  "name": "command-center",
+  "private": true,
+  "type": "module",
+  "description": "Command Center single-file app with an auto-save API for Vercel + Neon",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0"
+  }
+}

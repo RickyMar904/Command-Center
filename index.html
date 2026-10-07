@@ -352,6 +352,12 @@ table.dt th:first-child, table.dt td:first-child { text-align: left; }
 .rate-down { color: var(--danger); }
 #clock-pill { display: none; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--success-soft, var(--primary-soft)); color: var(--success); font-weight: 600; font-size: 13px; border: 0; cursor: pointer; white-space: nowrap; }
 #clock-pill.on { display: inline-flex; }
+#sync-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 0; font-weight: 600; font-size: 12.5px; cursor: pointer; white-space: nowrap; background: var(--muted); color: var(--muted-fg); }
+#sync-pill[hidden] { display: none; }
+#sync-pill svg { width: 14px; height: 14px; }
+#sync-pill.sync-saved { background: var(--success-soft); color: var(--success); }
+#sync-pill.sync-offline { background: var(--warning-soft); color: var(--warning); }
+#sync-pill.sync-error { background: var(--danger-soft); color: var(--danger); }
 #clock-pill svg { width: 14px; height: 14px; }
 .cal-pay { font-size: 10px; font-weight: 600; color: var(--success); display: block; margin-top: 1px; }
 @media (max-width: 760px) { .clock-card { grid-template-columns: 1fr; justify-items: center; text-align: center; } .punch { justify-content: center; } }
@@ -513,6 +519,7 @@ const I = {
   target: P('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>'),
   user: P('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   notes: P('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>'),
+  cloud: P('<path d="M17.5 19H7a5 5 0 1 1 1.6-9.7A6 6 0 0 1 20 11a4 4 0 0 1-2.5 8Z"/>'),
   template: P('<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/>'),
 };
 
@@ -552,6 +559,7 @@ function fmtMin(m) {
 /* ---------- Store ---------- */
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 let db = load();
+const bootHash = contentHash(db); // as stored, before this visit changes anything
 ensureDb();
 function ensureDb() {
   for (const k of ["templates", "inbox", "focusLog"]) if (!Array.isArray(db[k])) db[k] = [];
@@ -585,8 +593,147 @@ function save() {
   db.savedAt = new Date().toISOString();
   try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); storageOk = true; }
   catch (e) { if (storageOk) toast("This browser is not saving data. Use Data & backup to export your work."); storageOk = false; }
+  syncSoon();
 }
 function validDb(x) { return x && typeof x === "object" && Array.isArray(x.projects) && Array.isArray(x.tasks) && Array.isArray(x.phases || []); }
+
+/* ---------- Auto-save to the server (Vercel function + Neon). localStorage stays the fast local copy. ---------- */
+const SYNC_PASS = "command-center-offline-sync-passcode";
+const SYNC_META = "command-center-offline-sync-meta"; // { version, hash } of the copy last agreed with the server
+const SAFETY_KEY = "command-center-offline-safety-copies";
+const SYNC_URL = "api/state";
+const canSync = /^https?:$/.test(location.protocol);
+const sync = { state: "off", msg: "", timer: null, busy: false, again: false, ready: false, lastPull: 0 };
+/** Fingerprint of the data, ignoring the save time, so "changed?" means the content changed. */
+function contentHash(d) {
+  const s = JSON.stringify({ ...d, savedAt: undefined });
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+}
+function syncMeta() { try { const m = JSON.parse(lsGet(SYNC_META) || "{}"); return { version: Number(m.version) || 0, hash: m.hash || "" }; } catch (e) { return { version: 0, hash: "" }; } }
+const setSyncMeta = (version, hash) => lsSet(SYNC_META, JSON.stringify({ version, hash }));
+const syncOn = () => canSync && !!lsGet(SYNC_PASS);
+function setSync(state, msg = "") { sync.state = state; sync.msg = msg; paintSync(); }
+function paintSync() {
+  const pill = $("#sync-pill"); if (!pill) return;
+  const label = { off: "Auto-save off", saving: "Saving…", saved: "Saved", offline: "Offline", error: "Not saving" }[sync.state];
+  pill.hidden = !canSync;
+  pill.className = "sync-" + sync.state;
+  pill.title = sync.state === "saved" ? "Saved to your database" : sync.state === "offline" ? "Can't reach the server. Changes are kept on this device and saved when you're back online." : sync.state === "off" ? "Turn on auto-save under Data & backup" : sync.msg || label;
+  pill.querySelector("span").textContent = label;
+  const st = $("#sync-status"); if (st) st.innerHTML = syncStatusHtml();
+}
+function syncStatusHtml() {
+  if (!canSync) return `Auto-save works on your website address (Vercel), not in a file opened from this computer.`;
+  if (!lsGet(SYNC_PASS)) return `Off on this device. Enter your passcode to turn it on.`;
+  const m = syncMeta();
+  return ({ saving: "Saving…", saved: `<b style="color:var(--success)">Saved.</b> Every change is saved to your database a moment after you make it.`, offline: `<b style="color:var(--warning)">Offline.</b> Changes are kept on this device and saved when the connection is back.`, error: `<b style="color:var(--danger)">Not saving:</b> ${esc(sync.msg)}`, off: "Starting…" })[sync.state] + (m.version ? ` <span class="muted">Server copy #${m.version}.</span>` : "");
+}
+async function syncApi(method, body, keepalive = false) {
+  const res = await fetch(SYNC_URL, { method, cache: "no-store", keepalive, headers: { "Content-Type": "application/json", "x-sync-passcode": lsGet(SYNC_PASS) }, body: body ? JSON.stringify(body) : undefined });
+  let json = null; try { json = await res.json(); } catch (e) { /* empty or HTML error page */ }
+  return { status: res.status, body: json || {} };
+}
+/** Returns false (and shows why) when the server refused the request. */
+function syncAccepted(r) {
+  if (r.status === 200 || r.status === 409) return true;
+  if (r.status === 401) setSync("error", "the passcode doesn't match SYNC_PASSCODE in Vercel. Re-enter it under Data & backup.");
+  else if (r.status === 404) setSync("error", "the save API isn't deployed on this site yet. Redeploy on Vercel.");
+  else setSync("error", r.body.error || `the server answered ${r.status}.`);
+  return false;
+}
+function keepSafetyCopy(data, reason) {
+  if (!data || !(data.tasks || []).length && !(data.projects || []).length) return;
+  let list = []; try { list = JSON.parse(lsGet(SAFETY_KEY) || "[]"); } catch (e) { /* corrupt */ }
+  list.unshift({ id: uid(), at: new Date().toISOString(), reason, data });
+  for (let n = Math.min(list.length, 3); n > 0; n--) if (lsSet(SAFETY_KEY, JSON.stringify(list.slice(0, n)))) return;
+}
+function safetyCopies() { try { return JSON.parse(lsGet(SAFETY_KEY) || "[]"); } catch (e) { return []; } }
+function writeLocal() { try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); } catch (e) { /* save() already warns */ } }
+function adoptServer(remote) {
+  clearTimeout(sync.timer);
+  db = { ...emptyDb(), ...remote.data, phases: remote.data.phases || [] }; ensureDb();
+  setSyncMeta(remote.version, contentHash(db));
+  writeLocal();
+  if (rollRepeats()) save();
+  render();
+}
+/** Decide between this device's copy and the server's. `dirty` = this device has changes the server hasn't seen. */
+async function reconcile(remote, dirty) {
+  const meta = syncMeta();
+  if (!remote.data) return syncPush(true);                       // first run: server is empty, upload what's here
+  if (contentHash(remote.data) === contentHash(db)) { setSyncMeta(remote.version, contentHash(db)); return setSync("saved"); }
+  if (remote.version === meta.version) return dirty ? syncPush(true) : setSync("saved");
+  // The server moved on (another device saved). Newest copy wins; the other is kept as a safety copy.
+  const localAt = Date.parse(db.savedAt || 0) || 0, remoteAt = Date.parse(remote.data.savedAt || remote.updatedAt || 0) || 0;
+  if (!dirty || !meta.version || remoteAt >= localAt) {
+    const keep = (dirty || !meta.version) && !db.demo && (db.tasks.length || db.projects.length);
+    if (keep) keepSafetyCopy(JSON.parse(JSON.stringify(db)), meta.version ? "This device's changes, replaced by newer ones from another device" : "What was on this device before auto-save was turned on");
+    adoptServer(remote);
+    setSync("saved");
+    if (keep) toast("Loaded your saved data. The copy that was on this device is kept under Data & backup.");
+    return;
+  }
+  keepSafetyCopy(remote.data, "Older copy from the server, replaced by this device's newer changes");
+  setSyncMeta(remote.version, meta.hash);
+  return syncPush(true);
+}
+async function syncPull(dirtyOverride) {
+  if (!syncOn()) return setSync("off");
+  if (sync.busy) { sync.again = true; return; }
+  sync.busy = true; sync.lastPull = Date.now();
+  if (sync.state !== "saved") setSync("saving");
+  try {
+    const r = await syncApi("GET");
+    if (syncAccepted(r)) { sync.busy = false; await reconcile(r.body, dirtyOverride ?? contentHash(db) !== syncMeta().hash); }
+  } catch (e) { setSync("offline"); }
+  finally {
+    sync.busy = false; sync.ready = true;
+    if (sync.state === "saved" && contentHash(db) !== syncMeta().hash) syncSoon(); // edits made while checking
+  }
+}
+async function syncPush(nested) {
+  clearTimeout(sync.timer); sync.timer = null;
+  if (!syncOn()) return setSync("off");
+  if (sync.busy && !nested) { sync.again = true; return; }
+  const meta = syncMeta(), hash = contentHash(db);
+  if (meta.version && hash === meta.hash) return setSync("saved");
+  sync.busy = true; setSync("saving");
+  try {
+    const r = await syncApi("PUT", { data: db, baseVersion: meta.version });
+    if (!syncAccepted(r)) return;
+    if (r.status === 409) { sync.busy = false; return await reconcile(r.body.current, true); }
+    setSyncMeta(r.body.version, hash);
+    setSync("saved");
+  } catch (e) { setSync("offline"); }
+  finally {
+    sync.busy = false;
+    if (sync.again || (sync.state === "saved" && contentHash(db) !== syncMeta().hash)) { sync.again = false; syncSoon(); }
+  }
+}
+/** Called after every local save: send the change a moment later, batching quick edits together. */
+function syncSoon() {
+  if (!syncOn() || !sync.ready) return;
+  if (sync.state !== "offline" && sync.state !== "error") setSync("saving");
+  clearTimeout(sync.timer); sync.timer = setTimeout(() => syncPush(), 1500);
+}
+function syncStart() {
+  if (!syncOn()) { sync.ready = true; setSync("off"); }
+  else syncPull(bootHash !== syncMeta().hash);
+  document.addEventListener("visibilitychange", () => {
+    if (!syncOn()) return;
+    if (document.visibilityState === "hidden" && sync.timer) { // leaving the page: send what's pending right away
+      clearTimeout(sync.timer); sync.timer = null;
+      const meta = syncMeta(), body = { data: db, baseVersion: meta.version }, hash = contentHash(db);
+      syncApi("PUT", body, JSON.stringify(body).length < 60000).then((r) => { if (r.status === 200) { setSyncMeta(r.body.version, hash); setSync("saved"); } }).catch(() => {});
+    } else if (document.visibilityState === "visible" && Date.now() - sync.lastPull > 10000) syncPull();
+  });
+  window.addEventListener("online", () => syncPull());
+  setInterval(() => { if (syncOn() && sync.state === "offline") syncPull(); }, 30000);
+}
 
 const projById = (id) => db.projects.find((p) => p.id === id) || null;
 const phaseById = (id) => db.phases.find((p) => p.id === id) || null;
@@ -1095,6 +1242,7 @@ function renderShell() {
         <h1 id="page-title"></h1>
         <label class="search">${I.search}<input id="global-search" type="search" placeholder="Search tasks and projects" autocomplete="off" aria-label="Search"></label>
         <button class="btn" data-act="smart-add" aria-label="Smart add">${I.spark}<span>Smart add</span></button>
+        <button id="sync-pill" data-act="nav" data-view="data" hidden>${I.cloud}<span></span></button>
         <button id="clock-pill" data-act="nav" data-view="pay" title="On the clock. Open Pay">${I.punch}<span></span></button>
         <button class="btn btn-primary" data-act="quick-add" aria-label="Quick add">${I.plus}<span>Add task</span></button>
       </header>
@@ -1375,9 +1523,17 @@ function viewSearch() {
 function viewData() {
   const json = JSON.stringify(db, null, 2);
   const kb = (new Blob([json]).size / 1024).toFixed(1);
-  return `<div class="data-grid">
+  const copies = safetyCopies();
+  return `<section class="card" style="margin-bottom:16px"><div class="card-h"><h2>Auto-save</h2>${syncOn() ? `<span class="badge s-COMPLETED">On</span>` : `<span class="badge">Off</span>`}</div><div class="card-b">
+      <p id="sync-status">${syncStatusHtml()}</p>
+      ${canSync ? `<form class="add-inline" data-form="sync-pass"><input class="inp" type="password" id="sync-pass" name="syncPass" autocomplete="current-password" placeholder="${lsGet(SYNC_PASS) ? "Passcode saved. Enter a new one to change it" : "Sync passcode (SYNC_PASSCODE in Vercel)"}" aria-label="Sync passcode"><button class="btn ${lsGet(SYNC_PASS) ? "" : "btn-primary"}" type="submit">${lsGet(SYNC_PASS) ? "Change passcode" : "Turn on auto-save"}</button></form>
+      ${lsGet(SYNC_PASS) ? `<div class="row"><button class="btn btn-sm" data-act="sync-now">${I.cloud}Sync now</button><button class="btn btn-sm btn-ghost" data-act="sync-off">Turn off on this device</button></div>` : ""}` : ""}
+      <p class="hint">Saves everything to your own database, so it's there on any device that opens your site with the passcode. API keys below are never sent. The passcode is kept only in this browser.</p>
+      ${copies.length ? `<div class="tpl-list" style="margin-top:8px">${copies.map((c) => `<div class="tpl-item"><span class="grow"><b>Safety copy from ${esc(new Date(c.at).toLocaleString())}</b><br><span class="small muted">${esc(c.reason)} · ${plural((c.data.tasks || []).length, "task")}</span></span><button class="btn btn-sm" data-act="safety-download" data-id="${c.id}">Download</button><button class="btn btn-sm" data-act="safety-restore" data-id="${c.id}">Restore</button><button class="btn btn-sm btn-ghost" data-act="safety-delete" data-id="${c.id}">${I.trash}</button></div>`).join("")}</div>` : ""}
+    </div></section>
+  <div class="data-grid">
     <section class="card"><div class="card-h"><h2>Back up</h2></div><div class="card-b">
-      <p class="muted">Your work is saved in this browser only. Download a backup file now and then so clearing browser data never costs you anything.</p>
+      <p class="muted">${syncOn() ? "Auto-save keeps your work in your database. A backup file is still a good extra copy now and then." : "Your work is saved in this browser only. Download a backup file now and then so clearing browser data never costs you anything."}</p>
       <div class="row"><button class="btn btn-primary" data-act="export-download">Download backup</button><button class="btn" data-act="export-copy">Copy backup</button></div>
       <p class="hint">If the download does nothing (some previews block downloads), use Copy backup and paste it into a text file.</p>
     </div></section>
@@ -2917,6 +3073,16 @@ function viewReview() {
 }
 
 /* ---------- Actions ---------- */
+function downloadJson(data, name) {
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast("Backup downloaded");
+  } catch (e) { toast("Download is not available here. Use Copy backup instead."); }
+}
 const actions = {
   nav: (el) => { closeOverlay(); go(el.dataset.view); },
   "open-project": (el) => { closeOverlay(); go("project", { projectId: el.dataset.id }); },
@@ -3057,16 +3223,13 @@ const actions = {
     onYes: () => { db = emptyDb(); ensureDb(); save(); render(); toast("All data cleared"); } }),
   "reset-demo": () => confirmBox({ title: "Load demo data?", body: "This replaces everything currently in the app with the demo projects.", label: "Load demo data", danger: false,
     onYes: () => { const pay = db.pay; db = seed(); db.pay = pay; ensureDb(); save(); go("dashboard"); toast("Demo data loaded"); } }),
-  "export-download": () => {
-    try {
-      const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob); a.download = `command-center-backup-${today()}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      toast("Backup downloaded");
-    } catch (e) { toast("Download is not available here. Use Copy backup instead."); }
-  },
+  "sync-now": () => syncPull(),
+  "sync-off": () => confirmBox({ title: "Turn off auto-save on this device?", body: "Your data stays in this browser and in your database. Changes on this device stop being saved to the database until you enter the passcode again.", label: "Turn off", danger: false,
+    onYes: () => { lsSet(SYNC_PASS, ""); setSync("off"); closeOverlay(); render(); toast("Auto-save is off on this device"); } }),
+  "safety-download": (el) => { const c = safetyCopies().find((x) => x.id === el.dataset.id); if (c) downloadJson(c.data, `command-center-safety-copy-${c.at.slice(0, 10)}.json`); },
+  "safety-restore": (el) => { const c = safetyCopies().find((x) => x.id === el.dataset.id); if (c) importJson(JSON.stringify(c.data)); },
+  "safety-delete": (el) => { lsSet(SAFETY_KEY, JSON.stringify(safetyCopies().filter((x) => x.id !== el.dataset.id))); render(); },
+  "export-download": () => downloadJson(db, `command-center-backup-${today()}.json`),
   "export-copy": () => {
     const text = JSON.stringify(db, null, 2);
     const fallback = () => { const ta = $("#import-text"); ta.value = text; ta.focus(); ta.select(); toast("Backup text selected. Press Ctrl+C or Cmd+C to copy."); };
@@ -3124,6 +3287,12 @@ const forms = {
     if (!lsSet(EL_KEY, k)) { toast("This browser is blocking storage, so the key can't be saved."); return; }
     el.voices = null; el.failed = ""; el.cache.clear();
     render(); toast("Voice key saved in this browser"); loadElVoices(true);
+  },
+  "sync-pass": (form) => {
+    const k = form.syncPass.value.trim();
+    if (!k) { toast("Enter the passcode you set as SYNC_PASSCODE in Vercel."); return; }
+    if (!lsSet(SYNC_PASS, k)) { toast("This browser is blocking storage, so the passcode can't be saved."); return; }
+    sync.ready = true; render(); syncPull().then(() => { if (sync.state === "saved") toast("Auto-save is on"); });
   },
   "ai-key": (form) => {
     const k = form.aiKey.value.trim();
@@ -3282,6 +3451,7 @@ setInterval(paintClock, 1000);
 setTimeout(checkBriefingReminder, 1500);
 save();
 render();
+syncStart();
 })();
 </script>
 </body>
