@@ -1832,7 +1832,11 @@ const AI_KEY = "command-center-offline-ai-key";
 const AI_MODE = "command-center-offline-smart-mode";
 const AI_MODEL = "claude-opus-5-5";
 const AI_PROVIDER = "command-center-offline-ai-provider";
-const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash"]; // the alias first; the pinned model if the alias is ever retired
+/* Tried in order. A busy (503) or rate-limited model moves on to the next; a retired one (404) is skipped. */
+const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const AI_RETRY_MS = [1000, 2500]; // waits before the 2nd and 3rd try of a busy model
+const AI_BUSY = new Set([500, 502, 503, 504]);
+const aiWait = (ms) => new Promise((r) => setTimeout(r, ms));
 const GROQ_MODEL = "openai/gpt-oss-120b";
 /* AI services for Smart add. Each one has its own key, kept only in this browser (never in db, backups or auto-save). */
 const AI_PROVIDERS = {
@@ -1956,7 +1960,7 @@ async function aiFetch(name, url, opts, readError) {
   if (res.ok) return res.json();
   let msg = ""; try { msg = readError(await res.json()) || ""; } catch (e) { /* not JSON */ }
   if (res.status === 401 || res.status === 403 || (res.status === 400 && /api key/i.test(msg))) throw new Error(`${name} rejected the API key. Check it under Data & backup`);
-  if (res.status === 429) throw new Error(`${name} is rate limiting this key right now (free tiers have daily limits)`);
+  if (res.status === 429) { const e = new Error(`${name} is rate limiting this key right now (free tiers have daily limits)`); e.status = 429; throw e; }
   const err = new Error(`${name} returned an error (${res.status})${msg ? ": " + msg : ""}`); err.status = res.status;
   throw err;
 }
@@ -1974,7 +1978,7 @@ function geminiSchema(sc) {
   return out;
 }
 const AI_CALLS = {
-  async anthropic(key, system, user) {
+  async anthropic(key, system, user, onStatus) {
     const data = await aiFetch("Claude", "https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
@@ -1986,29 +1990,43 @@ const AI_CALLS = {
     }, (j) => j.error?.message);
     if (data.stop_reason === "refusal") throw new Error("Claude declined this text");
     if (data.stop_reason === "max_tokens") throw new Error("The text was too long for one pass");
-    return JSON.parse((data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""));
+    return { out: JSON.parse((data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("")), by: "Claude" };
   },
-  async gemini(key, system, user) {
+  async gemini(key, system, user, onStatus) {
     const body = JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
       generationConfig: { responseMimeType: "application/json", responseSchema: geminiSchema(AI_SCHEMA), maxOutputTokens: 8000, temperature: 0.2 },
     });
-    let data;
-    for (const model of GEMINI_MODELS) {
-      try {
-        data = await aiFetch("Gemini", `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key }, body }, (j) => j.error?.message);
-        break;
-      } catch (e) { if (e.status !== 404 || model === GEMINI_MODELS[GEMINI_MODELS.length - 1]) throw e; }
+    let data, used, firstErr;
+    models: for (const model of GEMINI_MODELS) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          data = await aiFetch("Gemini", `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key }, body }, (j) => j.error?.message);
+          used = model;
+          break models;
+        } catch (e) {
+          if (e.status !== 404 && e.status !== 429 && !AI_BUSY.has(e.status)) throw e; // bad key, bad request: no other model will help
+          if (e.status !== 404) firstErr = firstErr || e;
+          if (AI_BUSY.has(e.status) && attempt < AI_RETRY_MS.length) {
+            onStatus && onStatus(`Gemini (${model}) is busy, trying again…`);
+            await aiWait(AI_RETRY_MS[attempt]);
+            continue;
+          }
+          if (e.status !== 404) onStatus && onStatus(`Gemini (${model}) is busy, trying another Gemini model…`);
+          break;
+        }
+      }
     }
+    if (!data) throw firstErr || new Error("None of the Gemini models are available to this key");
     if (data.promptFeedback?.blockReason) throw new Error("Gemini declined this text");
     const c = (data.candidates || [])[0];
     if (!c) throw new Error("Gemini returned no answer");
     if (c.finishReason === "MAX_TOKENS") throw new Error("The text was too long for one pass");
     if (c.finishReason && c.finishReason !== "STOP") throw new Error("Gemini declined this text");
-    return JSON.parse((c.content?.parts || []).filter((p) => p.text && !p.thought).map((p) => p.text).join(""));
+    return { out: JSON.parse((c.content?.parts || []).filter((p) => p.text && !p.thought).map((p) => p.text).join("")), by: `Gemini (${used})` };
   },
-  async groq(key, system, user) {
+  async groq(key, system, user, onStatus) {
     const data = await aiFetch("Groq", "https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
@@ -2022,12 +2040,26 @@ const AI_CALLS = {
     if (!c) throw new Error("Groq returned no answer");
     if (c.finish_reason === "length") throw new Error("The text was too long for one pass");
     if (c.message?.refusal) throw new Error("Groq declined this text");
-    return JSON.parse(c.message?.content || "");
+    return { out: JSON.parse(c.message?.content || ""), by: `Groq (${GROQ_MODEL})` };
   },
 };
-async function aiSplit(text, meeting) {
-  const provider = aiProvider(), key = aiKey();
-  if (!key) throw new Error("No API key is saved yet");
+/** The chosen service first, then any other free service with a saved key. Claude is never used as a fallback, since it is paid. */
+async function aiCallWithFallback(system, user, onStatus) {
+  const chosen = aiProvider();
+  const order = [chosen, ...["gemini", "groq"].filter((id) => id !== chosen && lsGet(AI_PROVIDERS[id].key))];
+  const errors = [];
+  for (const id of order) {
+    const key = lsGet(AI_PROVIDERS[id].key);
+    if (!key) continue;
+    if (errors.length) onStatus && onStatus(`${errors[errors.length - 1].message}. Trying ${AI_PROVIDERS[id].label}…`);
+    try { return await AI_CALLS[id](key, system, user, onStatus); }
+    catch (e) { errors.push(e); }
+  }
+  const e = new Error(errors.map((x) => x.message).join(". ") || "No API key is saved yet");
+  throw e;
+}
+async function aiSplit(text, meeting, onStatus) {
+  if (!aiKey()) throw new Error("No API key is saved yet");
   const now = new Date();
   const projects = db.projects.filter((p) => !isClosedProject(p)).map((p) => ({ id: p.id, name: p.name, phases: phasesOf(p.id).map((ph) => ({ id: ph.id, name: ph.name })) }));
   const system = [
@@ -2050,8 +2082,8 @@ async function aiSplit(text, meeting) {
     "- Ignore filler words and small talk. Do not invent tasks that were not asked for.",
   ].join("\n");
   const user = `Projects and phases (JSON):\n${JSON.stringify(projects)}\n\nNotes:\n${text}`;
-  const out = await AI_CALLS[provider](key, system, user);
-  return (out.tasks || []).map((t) => {
+  const { out, by } = await aiCallWithFallback(system, user, onStatus);
+  const tasks = (out.tasks || []).map((t) => {
     const proj = projById(t.projectId);
     const projectId = proj && !isClosedProject(proj) ? proj.id : smart.projectId || null;
     const ph = phaseById(t.phaseId);
@@ -2067,6 +2099,8 @@ async function aiSplit(text, meeting) {
       projectId, phaseId: ph && ph.projectId === projectId ? ph.id : !proj && projectId === smart.projectId ? smart.phaseId || null : null, fromText: !!proj,
     };
   }).filter((t) => t.title);
+  tasks.by = by;
+  return tasks;
 }
 
 /* UI */
@@ -2113,7 +2147,7 @@ function updateAiNote() {
   if (smartMode() !== "ai") { el.innerHTML = "Works fully offline. Understands dates like tomorrow, Friday, next week, in 3 days and Oct 20, times like 9-10am, repeats like daily or every Monday and Wednesday, plus effort, priority, #tags and @project."; return; }
   const pv = aiProv(), change = `<button type="button" class="linkish" data-act="nav" data-view="data">Data &amp; backup</button>`;
   el.innerHTML = aiKey()
-    ? `AI mode sends this text and your project names to ${esc(pv.label)} using your own key. The key stays in this browser. If ${esc(pv.label)} can't be reached, the built-in splitter is used instead. Change the AI service under ${change}.`
+    ? `AI mode sends this text and your project names to ${esc(pv.label)} using your own key. The key stays in this browser. If ${esc(pv.label)} is busy, it tries again, then ${pv.label === "Claude" ? "" : "other free models and "}any other free service with a saved key, and only then the built-in splitter. Change the AI service under ${change}.`
     : `<b>No ${esc(pv.label)} API key saved yet.</b> Add a key (Gemini and Groq have free tiers) under ${change} to use AI mode. Until then the built-in splitter is used.`;
 }
 function smartStatus(msg, isError) {
@@ -2153,7 +2187,7 @@ async function runSmartSplit() {
   if (smartMode() === "ai" && aiKey()) {
     const name = aiProv().label;
     smartStatus(`Asking ${name} to split your notes…`);
-    try { items = await aiSplit(text, smart.meeting); note = smart.meeting ? `Action items found by ${name}. Check the owners and dates, then add.` : `Split by ${name}. Check the details, then add.`; }
+    try { items = await aiSplit(text, smart.meeting, (m) => smartStatus(m)); note = smart.meeting ? `Action items found by ${items.by}. Check the owners and dates, then add.` : `Split by ${items.by}. Check the details, then add.`; }
     catch (e) { items = smart.meeting ? meetingSplit(text) : ruleSplit(text); note = `${e.message}. Used the built-in splitter instead.`; }
   } else {
     items = smart.meeting ? meetingSplit(text) : ruleSplit(text);
