@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Command Center Offline</title>
+<!-- Home Screen app: files sit next to index.html on the Vercel site; a downloaded copy simply ignores them. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Command">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171e" media="(prefers-color-scheme: dark)">
 <style>
 /* Layout: fixed left sidebar + scrolling work area; collapses to a top nav strip on phones.
    Palette mirrors the Command Center app (src/app/globals.css). */
@@ -436,24 +446,125 @@ pre.json { max-height: 220px; overflow: auto; background: var(--muted); padding:
   .cols { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+/* Phone (760px and narrower): bottom tab bar, floating add button, full-screen sheets, 44px tap targets.
+   Nothing in this section changes the desktop layout. */
+.tabbar, .fab, .phone-only { display: none; }
+.cal-agenda { display: flex; flex-direction: column; gap: 12px; }
+.ag-day { overflow: hidden; }
+.ag-h { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--muted); flex-wrap: wrap; }
+.ag-h h3 { font-size: 14px; font-weight: 650; margin-right: auto; }
+.ag-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 14px; border: 0; border-top: 1px solid var(--border); border-left: 4px solid var(--primary); background: transparent; text-align: left; }
+.ag-item:first-of-type { border-top: 0; }
+.ag-item .ag-t { width: 64px; flex: none; font-size: 12.5px; font-weight: 600; color: var(--success); }
+.ag-item .ag-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-item.done .ag-n { text-decoration: line-through; color: var(--muted-fg); }
+.ag-item.next { opacity: .7; border-left-style: dashed; }
+.ag-item svg { width: 13px; height: 13px; flex: none; color: var(--muted-fg); }
+.more-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.more-grid button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 76px; padding: 10px 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); font-size: 13px; font-weight: 500; text-align: center; position: relative; }
+.more-grid button.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.more-grid svg { width: 22px; height: 22px; }
+.more-grid .nav-count { position: absolute; top: 6px; right: 6px; margin: 0; }
 @media (max-width: 760px) {
+  .phone-only { display: revert; }
+  .desk-only { display: none !important; }
   .shell { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; height: auto; flex-direction: row; align-items: center; padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--border); gap: 12px; overflow: hidden; }
-  .brand-name, .brand-sub { display: none; }
-  .brand { padding: 0; }
-  .nav { flex-direction: row; overflow-x: auto; min-width: 0; flex: 1; }
-  .nav button .lbl-long { display: none; }
-  .nav-count { display: none; }
-  .side-foot { display: none; } .game-side { display: none; }
-  .top { padding: 10px 16px; }
-  .top h1 { width: 100%; }
-  .search { flex: 1; width: auto; }
-  .view { padding: 16px 16px 40px; }
+  .side { display: none; }
+  .top { padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px)); gap: 8px; }
+  /* Header: title and status pills on top, search and Smart add underneath */
+  .top h1 { flex: 1; min-width: 0; font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top > .search { order: 10; }
+  .top > .btn[data-act="smart-add"] { order: 11; }
+  #sync-pill span { display: none; }
+  #sync-pill { width: 44px; justify-content: center; padding: 0; }
+  .top > .btn[data-act="quick-add"] { display: none; }
+  .top > .btn[data-act="smart-add"] span { display: none; }
+  .top > .btn[data-act="smart-add"] { width: 44px; justify-content: center; padding: 0; }
+  .search { flex: 1 1 calc(100% - 52px); width: auto; }
+  #sync-pill, #clock-pill.on { min-height: 44px; }
+  .view { padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(150px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
   .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); }
-  .tl { flex-wrap: wrap; }
-  .tl-badges { width: 100%; justify-content: flex-start; padding-left: 28px; }
+  /* Task line: check | title and details | star, badges under the title */
+  .tl { display: grid; grid-template-columns: 34px minmax(0, 1fr) 44px; column-gap: 8px; row-gap: 4px; align-items: center; padding: 8px 4px 8px 12px; }
+  .tl > .chk { grid-row: 1 / span 2; justify-self: center; }
+  .tl > .tl-main { grid-column: 2; min-height: 40px; justify-content: center; }
+  .tl > .tl-badges { grid-column: 2; grid-row: 2; justify-content: flex-start; }
+  .tl > .tl-badges:empty { display: none; }
+  .tl > :last-child { grid-column: 3; grid-row: 1 / span 2; justify-self: center; }
   .depth-1, .depth-2, .depth-3 { padding-left: 28px; }
   .filters .field { width: calc(50% - 4px); }
+  .filters .field[style] { width: 100% !important; }
+
+  /* Bottom tab bar */
+  .tabbar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 4px max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--border); }
+  .tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 54px; border: 0; background: transparent; color: var(--muted-fg); font-size: 11px; font-weight: 500; -webkit-tap-highlight-color: transparent; }
+  .tabbar button svg { width: 24px; height: 24px; }
+  .tabbar button.active { color: var(--primary); font-weight: 650; }
+  .tabbar .nav-count { position: absolute; top: 4px; left: calc(50% + 6px); margin: 0; font-size: 10.5px; padding: 0 5px; }
+
+  /* Floating add button */
+  .fab { display: grid; place-items: center; position: fixed; z-index: 31; right: max(18px, env(safe-area-inset-right, 0px)); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); width: 60px; height: 60px; border-radius: 50%; border: 0; background: var(--primary); color: var(--primary-fg); box-shadow: 0 8px 22px color-mix(in srgb, var(--primary) 45%, transparent); -webkit-tap-highlight-color: transparent; }
+  .fab svg { width: 28px; height: 28px; }
+  .fab:active { transform: scale(.95); }
+  .toast { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  #xp-pop { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+
+  /* Dialogs become full-screen sheets; short confirmations stay as a card */
+  .overlay { padding: 0; align-items: stretch; }
+  .overlay > .modal:not([role="alertdialog"]) { width: 100% !important; max-width: none; max-height: none; height: 100%; border-radius: 0; border: 0; display: flex; flex-direction: column; }
+  .overlay > .modal:not([role="alertdialog"]) .modal-h { position: sticky; top: 0; z-index: 2; background: var(--card); padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; border-bottom: 1px solid var(--border); }
+  .overlay > .modal:not([role="alertdialog"]) .modal-b { flex: 1; padding: 16px; }
+  .overlay > .modal:not([role="alertdialog"]) .modal-f { position: sticky; bottom: 0; z-index: 2; background: var(--card); border-top: 1px solid var(--border); padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .overlay > .modal:not([role="alertdialog"]) .modal-f .btn-primary { flex: 1; justify-content: center; }
+  /* Add task: secondary buttons on top, then "Add to My Day" beside the big Add task button */
+  [data-form="quick-add"] .modal-f > .btn:not(.btn-primary) { order: -1; flex: 1; justify-content: center; }
+  [data-form="quick-add"] .modal-f > label { margin-right: 0 !important; min-height: 44px; }
+  .overlay > .modal[role="alertdialog"] { align-self: center; margin: 16px; }
+  .drawer-h { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+  .drawer-b { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+
+  /* Tap targets: 44px minimum; 16px text in fields so Safari does not zoom in */
+  .btn, .btn-sm { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+  .btn svg { width: 18px; height: 18px; }
+  .icon-btn, .star { min-width: 44px; min-height: 44px; }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .star svg { width: 20px; height: 20px; }
+  .chk { width: 26px; height: 26px; position: relative; }
+  .chk::before { content: ""; position: absolute; inset: -9px; }
+  .chk svg { width: 15px; height: 15px; }
+  .inp, select.inp, textarea.inp, .search input, input[type="search"] { font-size: 16px !important; min-height: 44px; padding: 8px 11px; }
+  .search input { padding-left: 36px; }
+  .title-inp { font-size: 18px; min-height: 44px; }
+  textarea.inp { min-height: 96px; }
+  .punch .inp, .sa-row .inp { font-size: 16px; }
+  input[type="checkbox"]:not(.days input):not(.seg input) { width: 22px; height: 22px; }
+  .days { gap: 6px; }
+  .days label span, .days.compact label span { min-width: 44px; min-height: 44px; height: auto; font-size: 14px; }
+  .linkish { padding: 12px 4px; }
+  .seg span { min-height: 40px; padding: 6px 14px; }
+  .tpl button { min-height: 40px; font-size: 14px; }
+  .tpl .tpl-x { min-width: 40px; justify-content: center; }
+  .cal-item { min-height: 32px; font-size: 13px; }
+  .prow, .inbox-item, .rv-row { min-height: 52px; }
+
+  /* Board: one column at a time, swipe sideways */
+  .board-wrap { scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px 6px; scroll-padding: 0 16px; }
+  .board { display: flex; min-width: 0; gap: 10px; }
+  .col { flex: 0 0 86%; scroll-snap-align: start; min-height: 50vh; }
+  .bcard { padding: 12px; min-height: 56px; }
+
+  /* Tables become stacked cards (labels come from data-label, set after each render) */
+  table.pay-table, table.dt { border-collapse: separate; }
+  table.pay-table thead, table.dt thead { display: none; }
+  table.pay-table tr, table.dt tr { display: block; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  table.pay-table td, table.dt td { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border: 0; text-align: right; white-space: normal; background: transparent !important; }
+  table.pay-table td:first-child, table.dt td:first-child { font-weight: 650; font-size: 14px; padding-bottom: 4px; }
+  table.pay-table td:not(:first-child)::before, table.dt td:not(:first-child)::before { content: attr(data-label); color: var(--muted-fg); font-weight: 500; text-align: left; flex: none; }
+  table.pay-table td.pl { text-align: right; }
+  table.pay-table td.blank { display: none; }
+  table.pay-table tr.today { background: var(--primary-soft); }
+  .punch .inp { width: 120px; }
+  .hbar { grid-template-columns: minmax(70px, 120px) 1fr 60px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .modal, .drawer { animation: pop .14s ease-out; }
@@ -625,7 +736,7 @@ function paintSync() {
   pill.hidden = !canSync;
   pill.className = "sync-" + sync.state;
   pill.title = sync.state === "saved" ? "Saved to your database" : sync.state === "offline" ? "Can't reach the server. Changes are kept on this device and saved when you're back online." : sync.state === "off" ? "Turn on auto-save under Data & backup" : sync.msg || label;
-  pill.querySelector("span").textContent = label;
+  pill.querySelector("span").textContent = label; pill.setAttribute("aria-label", label);
   const st = $("#sync-status"); if (st) st.innerHTML = syncStatusHtml();
 }
 function syncStatusHtml() {
@@ -1222,6 +1333,11 @@ const NAV = [
   ["dashboard", "Dashboard", I.dashboard], ["briefing", "Briefing", I.sunrise], ["myday", "My Day", I.sun], ["inbox", "Inbox", I.inbox], ["projects", "Projects", I.folder],
   ["tasks", "Tasks", I.tasks], ["board", "Board", I.board], ["calendar", "Calendar", I.calendar], ["review", "Weekly review", I.review], ["tracker", "Tracker", I.chart], ["pay", "Pay", I.dollar], ["data", "Data & backup", I.data],
 ];
+/* Phone tab bar: four fixed tabs, everything else under More */
+const TABS = [["myday", "My Day", I.sun], ["tasks", "Tasks", I.tasks], ["calendar", "Calendar", I.calendar], ["pay", "Pay", I.dollar]];
+const MORE_ACTIONS = [["smart-add", "Smart add", I.spark], ["capture", "Quick capture", I.inbox], ["meeting", "Meeting notes", I.notes], ["focus", "Focus", I.target]];
+const phoneMq = window.matchMedia ? matchMedia("(max-width: 760px)") : { matches: false };
+const isPhone = () => phoneMq.matches;
 const TITLES = { briefing: "Morning briefing", dashboard: "Dashboard", myday: "My Day", projects: "Projects", project: "Project", tasks: "Tasks", inbox: "Inbox", review: "Weekly review", tracker: "Tracker", pay: "Pay and hours", board: "Board", calendar: "Calendar", search: "Search", data: "Data & backup" };
 
 function renderShell() {
@@ -1250,6 +1366,8 @@ function renderShell() {
       </header>
       <main class="view" id="view"></main>
     </div>
+    <nav class="tabbar" id="tabbar" aria-label="Main"></nav>
+    <button class="fab" data-act="quick-add" aria-label="Add task">${I.plus}</button>
   </div>`;
   updateThemeButton();
 }
@@ -1259,6 +1377,24 @@ function renderNav() {
   const active = ui.view === "project" ? "projects" : ui.view;
   $("#nav").innerHTML = NAV.map(([k, label, icon]) =>
     `<button data-act="nav" data-view="${k}" class="${active === k ? "active" : ""}" ${active === k ? 'aria-current="page"' : ""}>${icon}<span class="${k === "data" ? "lbl-long" : ""}">${label}</span>${k === "tasks" && overdue ? `<span class="nav-count num">${overdue}</span>` : ""}${k === "inbox" && db.inbox.length ? `<span class="nav-count num" style="background:var(--primary-soft);color:var(--primary)">${db.inbox.length}</span>` : ""}</button>`).join("");
+  const onTab = TABS.some(([k]) => k === active);
+  $("#tabbar").innerHTML = TABS.map(([k, label, icon]) =>
+    `<button data-act="nav" data-view="${k}" class="${active === k ? "active" : ""}" ${active === k ? 'aria-current="page"' : ""}>${icon}<span>${label}</span>${k === "tasks" && overdue ? `<span class="nav-count num">${overdue}</span>` : ""}</button>`).join("") +
+    `<button data-act="more" class="${onTab ? "" : "active"}" aria-haspopup="dialog">${I.list}<span>More</span>${db.inbox.length ? `<span class="nav-count num" style="background:var(--primary-soft);color:var(--primary)">${db.inbox.length}</span>` : ""}</button>`;
+}
+function openMore() {
+  const active = ui.view === "project" ? "projects" : ui.view;
+  const views = NAV.filter(([k]) => !TABS.some(([t]) => t === k));
+  openOverlay(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="more-title">
+    <div class="modal-h"><h2 id="more-title">More</h2><button type="button" class="icon-btn" data-act="close" aria-label="Close">${I.x}</button></div>
+    <div class="modal-b">
+      <div class="section-label">Go to</div>
+      <div class="more-grid">${views.map(([k, label, icon]) => `<button data-act="nav" data-view="${k}" class="${active === k ? "active" : ""}">${icon}<span>${label}</span>${k === "inbox" && db.inbox.length ? `<span class="nav-count num" style="background:var(--primary-soft);color:var(--primary)">${db.inbox.length}</span>` : ""}</button>`).join("")}</div>
+      <div class="section-label">Do</div>
+      <div class="more-grid">${MORE_ACTIONS.map(([act, label, icon]) => `<button data-act="${act}">${icon}<span>${label}</span></button>`).join("")}<button data-act="cycle-theme" id="theme-btn-more">${I.theme}<span></span></button></div>
+      <button class="game-side" style="display:flex" data-act="nav" data-view="tracker" aria-label="Open Tracker" id="game-more"></button>
+    </div></div>`);
+  updateThemeButton(); paintGameSide();
 }
 
 function render() {
@@ -1273,8 +1409,16 @@ function render() {
   const reviewBanner = reviewDue ? `<div class="banner"><p><b>Time for your weekly review.</b> Ten minutes to clear what slipped and plan next week.</p><button class="btn btn-sm btn-primary" data-act="nav" data-view="review">${I.review}Start review</button><button class="btn btn-sm btn-ghost" data-act="review-snooze">Not now</button></div>` : "";
   $("#view").innerHTML = remind + reviewBanner + banner + (views[ui.view] || viewDashboard)();
   if (ui.view === "board") wireBoard();
+  labelTables();
   paintClock();
   if (ui.drawerTask && !taskById(ui.drawerTask)) closeOverlay();
+}
+/** Copies each column heading onto its cells so phone CSS can show tables as stacked cards. */
+function labelTables() {
+  for (const tb of document.querySelectorAll("#view table.pay-table, #view table.dt")) {
+    const heads = [...tb.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+    for (const tr of tb.querySelectorAll("tbody tr")) [...tr.children].forEach((td, i) => { if (heads[i]) td.setAttribute("data-label", heads[i]); td.classList.toggle("blank", !td.textContent.trim()); });
+  }
 }
 function go(view, extra = {}) {
   Object.assign(ui, { view }, extra);
@@ -1453,7 +1597,7 @@ function viewBoard() {
   const list = db.tasks.filter((t) => !hasChildren(t.id) && t.status !== "CANCELLED" && (ui.boardProject === "all" || (ui.boardProject === "none" ? !t.projectId : t.projectId === ui.boardProject)));
   const projOpts = `<option value="all">All projects</option><option value="none"${ui.boardProject === "none" ? " selected" : ""}>No project</option>` + db.projects.map((p) => `<option value="${p.id}"${ui.boardProject === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("");
   return `<div class="filters"><label class="field" style="width:240px"><span>Project</span><select class="inp" id="board-project" data-filter="board">${projOpts}</select></label>
-    <span class="hint" style="padding-bottom:8px">Drag cards between columns to change status. Shows tasks without subtasks.</span></div>
+    <span class="hint desk-only" style="padding-bottom:8px">Drag cards between columns to change status. Shows tasks without subtasks.</span><span class="hint phone-only">Swipe sideways for each status. Tap a card to change it.</span></div>
   <div class="board-wrap"><div class="board">${BOARD_COLS.map((s) => {
     const items = list.filter((t) => t.status === s).sort((a, b) => PRANK[a.priority] - PRANK[b.priority] || (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
     return `<div class="col" data-col="${s}"><div class="col-h"><span class="badge s-${s}">${STATUS[s]}</span><span class="n num">${items.length}</span></div>
@@ -1479,7 +1623,32 @@ function wireBoard() {
   });
 }
 
+/* Phones default to a 3-day list; Day and Month are one tap away. Desktop always shows the month grid. */
+const calMode = () => (isPhone() ? ui.calMode || "3day" : "month");
+const calModeSeg = () => `<div class="seg phone-only" role="group" aria-label="Calendar view">${[["day", "Day"], ["3day", "3 days"], ["month", "Month"]].map(([k, l]) => `<label><input type="radio" name="cal-mode" data-act="cal-mode" data-mode="${k}" ${calMode() === k ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>`;
+function viewAgenda(n) {
+  const from = ui.calDay || today(), to = addDays(from, n - 1), td = today();
+  const byDay = new Map();
+  for (const t of db.tasks) {
+    if (t.status === "CANCELLED") continue;
+    for (const o of occurrencesIn(t, from, to)) { if (!byDay.has(o.date)) byDay.set(o.date, []); byDay.get(o.date).push({ t, ...o }); }
+  }
+  const days = Array.from({ length: n }, (_, i) => addDays(from, i)).map((key) => {
+    const items = (byDay.get(key) || []).sort((a, b) => Number(a.done) - Number(b.done) || (a.t.dueTime || "99").localeCompare(b.t.dueTime || "99") || PRANK[a.t.priority] - PRANK[b.t.priority]);
+    const hrs = dayHours(key);
+    const payMark = db.pay.amount > 0 && periodStartOf(key) === key ? `<span class="cal-pay">Pay period starts</span>` : "";
+    return `<section class="card ag-day"><div class="ag-h"><h3>${esc(fmtDate(key, { weekday: "long", month: "short", day: "numeric" }))}</h3>${key === td ? `<span class="badge s-IN_PROGRESS">Today</span>` : ""}${hrs ? `<span class="small muted num">${esc(fmtHours(hrs))} on the clock</span>` : ""}${payMark}</div>
+      ${items.length ? items.map(({ t, done, next }) => { const p = projById(t.projectId); return `<button class="ag-item ${done ? "done" : ""} ${next ? "next" : ""}" style="border-left-color:${esc(p ? p.color : "var(--muted-fg)")}" data-act="open-task" data-id="${t.id}"><span class="ag-t num">${t.dueTime ? esc(fmtTime(t.dueTime)) : '<span class="muted">Any time</span>'}</span><span class="ag-n">${esc(t.title)}</span>${t.repeat ? I.repeat : ""}</button>`; }).join("") : `<div class="empty small">Nothing scheduled.</div>`}</section>`;
+  });
+  const label = n === 1 ? fmtDate(from, { weekday: "short", month: "short", day: "numeric" }) : `${fmtDate(from, { month: "short", day: "numeric" })} – ${fmtDate(to, { month: "short", day: "numeric" })}`;
+  return `${calModeSeg()}<div class="row"><button class="btn btn-sm" data-act="cal-step" data-n="-${n}" aria-label="Previous ${n === 1 ? "day" : n + " days"}">${I.left}</button>
+    <h2 style="font-size:16px;flex:1;text-align:center">${esc(label)}</h2>
+    <button class="btn btn-sm" data-act="cal-step" data-n="${n}" aria-label="Next ${n === 1 ? "day" : n + " days"}">${I.right}</button>
+    <button class="btn btn-sm btn-ghost" data-act="cal-today">Today</button></div>
+  <div class="cal-agenda">${days.join("")}</div>`;
+}
 function viewCalendar() {
+  if (calMode() !== "month") return viewAgenda(calMode() === "day" ? 1 : 3);
   const [y, m] = ui.calMonth.split("-").map(Number);
   const first = new Date(y, m - 1, 1);
   const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7));
@@ -1501,7 +1670,7 @@ function viewCalendar() {
       ${items.map(({ t, done, next }) => { const p = projById(t.projectId); return `<button class="cal-item ${done ? "done" : ""} ${next ? "next" : ""}" style="border-left-color:${esc(p ? p.color : "var(--muted-fg)")}" data-act="open-task" data-id="${t.id}" title="${esc(t.title + (t.dueTime ? " · " + fmtSlot(t) : "") + (t.repeat ? " · " + repeatLabel(t.repeat.days) : ""))}">${t.repeat ? I.repeat + " " : ""}${t.dueTime ? `<b class="num">${esc(fmtTime(t.dueTime))}</b> ` : ""}${esc(t.title)}</button>`; }).join("")}</div>`);
     if (i >= 34 && d.getMonth() !== m - 1 && (i + 1) % 7 === 0) break;
   }
-  return `<div class="row"><button class="btn btn-sm" data-act="cal-move" data-n="-1" aria-label="Previous month">${I.left}</button>
+  return `${calModeSeg()}<div class="row"><button class="btn btn-sm" data-act="cal-move" data-n="-1" aria-label="Previous month">${I.left}</button>
     <h2 style="font-size:16px;min-width:150px;text-align:center">${first.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
     <button class="btn btn-sm" data-act="cal-move" data-n="1" aria-label="Next month">${I.right}</button>
     <button class="btn btn-sm btn-ghost" data-act="cal-today">Today</button><span class="hint">Tasks appear on their due date. Repeating tasks show on each repeat day.</span></div>
@@ -2848,9 +3017,9 @@ function goalChip() {
   return `<button class="goal-chip linkish" data-act="nav" data-view="tracker" style="text-decoration:none;color:inherit">${ringSvg(d, g.daily)}<span class="small" style="text-align:left"><b>${d} of ${g.daily}</b> tasks today<br><span class="muted">${weekDone()} of ${g.weekly} this week</span></span>${flameHtml()}<span class="small muted">${n ? `day streak` : ""}</span></button>`;
 }
 function paintGameSide() {
-  const el = $("#game-side"); if (!el || !db.game) return;
+  if (!db.game) return;
   const xp = db.game.xp, L = levelOf(xp), a = levelStart(L), b = levelStart(L + 1);
-  el.innerHTML = `<span class="game-row">${I.trophy}<b>Level ${L}</b><span class="muted">${esc(levelName(L))}</span><span class="sp ${currentStreak() ? "on" : ""}" title="Day streak">${I.flame}${currentStreak()}</span></span>
+  for (const el of document.querySelectorAll("#game-side, #game-more")) el.innerHTML = `<span class="game-row">${I.trophy}<b>Level ${L}</b><span class="muted">${esc(levelName(L))}</span><span class="sp ${currentStreak() ? "on" : ""}" title="Day streak">${I.flame}${currentStreak()}</span></span>
     <span class="xpbar" title="${xp - a} of ${b - a} XP to level ${L + 1}"><i style="width:${Math.round(((xp - a) / (b - a)) * 100)}%"></i></span>
     <span class="game-row muted num">${xp - a} / ${b - a} XP<span class="sp" style="color:inherit">${doneOn(today())}/${db.game.goals.daily} today</span></span>`;
 }
@@ -3254,6 +3423,7 @@ const actions = {
     toast(`${replaced ? "Updated" : "Saved"} template "${t.title}". Use it from Add task`);
   },
   capture: () => openCapture(),
+  more: () => openMore(),
   "capture-mic": () => captureMic(),
   meeting: () => openSmartAdd({ meeting: true }),
   "inbox-task": (el) => { const it = db.inbox.find((x) => x.id === el.dataset.id); if (it) openQuickAdd({ text: it.text, inboxId: it.id }); },
@@ -3331,7 +3501,9 @@ const actions = {
   "filter-status": (el) => { ui.filters = { project: "all", status: el.dataset.status, priority: "all", due: "all", sort: "score" }; go("tasks"); },
   "reset-filters": () => { ui.filters = { project: "all", status: "open", priority: "all", due: "all", sort: "score" }; render(); },
   "cal-move": (el) => { const [y, m] = ui.calMonth.split("-").map(Number); const d = new Date(y, m - 1 + Number(el.dataset.n), 1); ui.calMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; render(); },
-  "cal-today": () => { ui.calMonth = today().slice(0, 7); render(); },
+  "cal-today": () => { ui.calMonth = today().slice(0, 7); ui.calDay = today(); render(); },
+  "cal-step": (el) => { ui.calDay = addDays(ui.calDay || today(), Number(el.dataset.n)); ui.calMonth = ui.calDay.slice(0, 7); render(); },
+  "cal-mode": (el) => { ui.calMode = el.dataset.mode; if (ui.calMode !== "month" && ui.calMonth !== today().slice(0, 7) && !ui.calDay) ui.calDay = ui.calMonth + "-01"; render(); },
   "clear-demo": () => confirmBox({ title: "Clear the demo data?", body: "All demo projects and tasks will be removed so you can start with a clean slate.", label: "Clear demo data",
     onYes: () => { const pay = db.pay; db = emptyDb(); db.pay = pay; ensureDb(); save(); go("projects"); toast("Demo data cleared"); } }),
   "clear-all": () => confirmBox({ title: "Clear all data?", body: "Every project, phase and task in this browser will be removed. Download a backup first if you may want it back.", label: "Clear all data",
@@ -3498,7 +3670,7 @@ function applyTheme(mode) {
 }
 function updateThemeButton() {
   let cur = "system"; try { cur = localStorage.getItem(THEME_KEY) || "system"; } catch (e) {}
-  const b = $("#theme-btn span"); if (b) b.textContent = { system: "Theme: match system", light: "Theme: light", dark: "Theme: dark" }[cur];
+  for (const b of document.querySelectorAll("#theme-btn span, #theme-btn-more span")) b.textContent = { system: "Theme: match system", light: "Theme: light", dark: "Theme: dark" }[cur];
 }
 
 /* ---------- Wiring ---------- */
@@ -3571,6 +3743,11 @@ setTimeout(checkBriefingReminder, 1500);
 save();
 render();
 syncStart();
+if (phoneMq.addEventListener) phoneMq.addEventListener("change", () => { if (ui.view === "calendar") render(); });
+// Home Screen app: a network-first service worker lets the installed app open with no signal. Only on the hosted site.
+if ("serviceWorker" in navigator && /^https:$/.test(location.protocol) && window.isSecureContext && window.top === window.self) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* not available here (preview or file) */ });
+}
 })();
 </script>
 </body>

@@ -19,6 +19,12 @@ The site also has a small save API (`api/state.js`), so Vercel installs one pack
 
 Voice input, the spoken morning briefing and AI mode work only when the file is opened from your own computer (not inside a sandboxed preview).
 
+## On your iPhone
+
+Below 760px wide the app switches to a phone layout: a bottom tab bar (My Day, Tasks, Calendar, Pay, More), a round **+** button that opens Add task full screen, 44px buttons, a 3-day calendar list (Day and Month one tap away), a board you swipe one column at a time, and the pay table as stacked cards. The desktop layout does not change.
+
+To install it, open your Vercel site in Safari, tap **Share → Add to Home Screen**. It then opens full screen with its own icon (`manifest.webmanifest`, `icons/`). A small service worker (`sw.js`) keeps the last copy of the page so the Home Screen app still opens with no signal; it always tries the network first, so new deploys show up on the next open, and it never caches the save API.
+
 ## Auto-save to your database
 
 On your Vercel site, every change is saved to your Neon database a moment after you make it, so you never need to download and re-import backups. A small badge at the top of the app shows **Saved**, **Saving…**, **Offline** or **Not saving**.
