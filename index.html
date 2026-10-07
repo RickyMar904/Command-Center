@@ -369,6 +369,8 @@ table.dt th:first-child, table.dt td:first-child { text-align: left; }
 .tpl .tpl-x { padding: 3px 8px 3px 4px; color: var(--muted-fg); }
 .tpl-list { display: flex; flex-direction: column; }
 .tpl-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.ai-prov { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border); }
+.ai-prov .hint { margin: 0; }
 .tpl-item:first-child { border-top: 0; }
 .tpl-item .grow { flex: 1; min-width: 0; }
 .sa-extra { grid-column: 2 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1544,10 +1546,15 @@ function viewData() {
       <div class="row"><button class="btn" data-act="import-text">Restore from text</button></div>
     </div></section>
     <section class="card"><div class="card-h"><h2>AI for Smart add</h2><span class="badge">Optional</span></div><div class="card-b">
-      <p class="muted">Smart add can use Claude to split your notes into tasks. It sends the text you split, plus your project and phase names, to Anthropic's API with your own API key, which you can create at console.anthropic.com. Usage is billed to that key.</p>
-      <form class="add-inline" data-form="ai-key"><input class="inp" type="password" id="ai-key" name="aiKey" autocomplete="off" placeholder="${lsGet(AI_KEY) ? "Key saved, ending in " + esc(lsGet(AI_KEY).slice(-4)) : "sk-ant-..."}" aria-label="Anthropic API key"><button class="btn" type="submit">Save key</button></form>
-      <div class="row">${lsGet(AI_KEY) ? `<span class="badge s-COMPLETED">Key saved</span><button class="btn btn-sm btn-danger" data-act="ai-remove-key">Remove key</button>` : `<span class="badge">No key saved</span>`}</div>
-      <p class="hint">The key is stored only in this browser and is never included in backups. AI mode works in the downloaded file; the claude.ai preview blocks outside connections, so it falls back to the built-in splitter there.</p>
+      <p class="muted">Smart add and Meeting notes can use an AI model to split your notes into tasks. The text you split, plus your project and phase names, is sent to the service you pick below with your own API key.</p>
+      <div class="seg" role="radiogroup" aria-label="AI service">${Object.entries(AI_PROVIDERS).map(([id, pv]) => `<label><input type="radio" name="aiprov" value="${id}" data-aiprov ${aiProvider() === id ? "checked" : ""}><span>${esc(pv.label)}${lsGet(pv.key) ? " ✓" : ""}</span></label>`).join("")}</div>
+      ${Object.entries(AI_PROVIDERS).map(([id, pv]) => `<div class="ai-prov">
+        <div class="row"><b>${esc(pv.label)}</b>${pv.tag ? `<span class="badge">${esc(pv.tag)}</span>` : ""}${aiProvider() === id ? `<span class="badge s-IN_PROGRESS">In use</span>` : ""}</div>
+        <p class="hint">${pv.help}</p>
+        <form class="add-inline" data-form="ai-key" data-provider="${id}"><input class="inp" type="password" id="ai-key-${id}" name="aiKey" autocomplete="off" placeholder="${lsGet(pv.key) ? "Key saved, ending in " + esc(lsGet(pv.key).slice(-4)) : esc(pv.placeholder)}" aria-label="${esc(pv.label)} API key"><button class="btn" type="submit">Save key</button></form>
+        <div class="row">${lsGet(pv.key) ? `<span class="badge s-COMPLETED">Key saved</span><button class="btn btn-sm btn-danger" data-act="ai-remove-key" data-provider="${id}">Remove key</button>` : `<span class="badge">No key saved</span>`}</div>
+      </div>`).join("")}
+      <p class="hint">Keys are stored only in this browser. They are never included in backups or auto-save, and each key is only sent to its own service. AI mode works on your website and in the downloaded file; the claude.ai preview blocks outside connections, so it falls back to the built-in splitter there.</p>
     </div></section>
     <section class="card"><div class="card-h"><h2>Briefing voice (ElevenLabs)</h2><span class="badge">Optional</span></div><div class="card-b">
       <p class="muted">Gives the morning briefing a natural-sounding voice. When it's on, the briefing text is sent to ElevenLabs to make the audio. Without a key, or if ElevenLabs can't be reached, the browser's built-in voice is used.</p>
@@ -1824,8 +1831,25 @@ function drawerHtml(t) {
 const AI_KEY = "command-center-offline-ai-key";
 const AI_MODE = "command-center-offline-smart-mode";
 const AI_MODEL = "claude-opus-5-5";
+const AI_PROVIDER = "command-center-offline-ai-provider";
+const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash"]; // the alias first; the pinned model if the alias is ever retired
+const GROQ_MODEL = "openai/gpt-oss-120b";
+/* AI services for Smart add. Each one has its own key, kept only in this browser (never in db, backups or auto-save). */
+const AI_PROVIDERS = {
+  anthropic: { label: "Claude", tag: "Paid", key: AI_KEY, placeholder: "sk-ant-...", help: "Anthropic's Claude. Create a key at console.anthropic.com; usage is billed to that key." },
+  gemini: { label: "Gemini", tag: "Free tier", key: "command-center-offline-gemini-key", placeholder: "AIza...", help: "Google's Gemini Flash. Create a free key at aistudio.google.com (Get API key, then Create API key). The free tier has daily limits, and Google may use free-tier text to improve its products." },
+  groq: { label: "Groq", tag: "Free tier", key: "command-center-offline-groq-key", placeholder: "gsk_...", help: "Fast open models (GPT-OSS 120B) on Groq. Create a free key at console.groq.com/keys. The free tier has rate limits." },
+};
 const lsGet = (k) => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
 const lsSet = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); return true; } catch (e) { return false; } };
+/** The chosen AI service; until one is picked, the first one with a saved key (Claude when none is). */
+function aiProvider() {
+  const picked = lsGet(AI_PROVIDER);
+  if (AI_PROVIDERS[picked]) return picked;
+  return Object.keys(AI_PROVIDERS).find((id) => lsGet(AI_PROVIDERS[id].key)) || "anthropic";
+}
+const aiProv = () => AI_PROVIDERS[aiProvider()];
+const aiKey = () => lsGet(aiProv().key);
 const smart = { items: [], projectId: "", phaseId: "", rec: null, listening: false, busy: false };
 const SAMPLE = "Tomorrow call the vendor about the implementation quote, then update the survey binder by Friday. Next week draft the new staffing template, 3 hours, high priority. Remember to book the mock survey walkthrough in 2 weeks and send the training schedule to nursing.";
 
@@ -1924,8 +1948,85 @@ const AI_SCHEMA = {
     },
   },
 };
+/** Fetch wrapper shared by the AI services: turns network and HTTP failures into readable messages. */
+async function aiFetch(name, url, opts, readError) {
+  let res;
+  try { res = await fetch(url, opts); }
+  catch (e) { throw new Error(`Could not reach ${name}. Check your internet connection (the claude.ai preview also blocks this; use your website or the downloaded file)`); }
+  if (res.ok) return res.json();
+  let msg = ""; try { msg = readError(await res.json()) || ""; } catch (e) { /* not JSON */ }
+  if (res.status === 401 || res.status === 403 || (res.status === 400 && /api key/i.test(msg))) throw new Error(`${name} rejected the API key. Check it under Data & backup`);
+  if (res.status === 429) throw new Error(`${name} is rate limiting this key right now (free tiers have daily limits)`);
+  const err = new Error(`${name} returned an error (${res.status})${msg ? ": " + msg : ""}`); err.status = res.status;
+  throw err;
+}
+/** Gemini's responseSchema is an OpenAPI subset: nullable instead of anyOf-null, string-only enums, no additionalProperties. */
+function geminiSchema(sc) {
+  if (Array.isArray(sc)) return sc.map(geminiSchema);
+  if (!sc || typeof sc !== "object") return sc;
+  if (sc.anyOf) { const real = sc.anyOf.find((x) => x.type !== "null"); return { ...geminiSchema(real), nullable: true }; }
+  const out = {};
+  for (const [k, v] of Object.entries(sc)) {
+    if (k === "additionalProperties") continue;
+    if (k === "enum" && sc.type !== "string") continue;
+    out[k] = k === "properties" ? Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, geminiSchema(pv)])) : geminiSchema(v);
+  }
+  return out;
+}
+const AI_CALLS = {
+  async anthropic(key, system, user) {
+    const data = await aiFetch("Claude", "https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: AI_MODEL, max_tokens: 8000, system,
+        output_config: { effort: "low", format: { type: "json_schema", schema: AI_SCHEMA } },
+        messages: [{ role: "user", content: user }],
+      }),
+    }, (j) => j.error?.message);
+    if (data.stop_reason === "refusal") throw new Error("Claude declined this text");
+    if (data.stop_reason === "max_tokens") throw new Error("The text was too long for one pass");
+    return JSON.parse((data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""));
+  },
+  async gemini(key, system, user) {
+    const body = JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: user }] }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: geminiSchema(AI_SCHEMA), maxOutputTokens: 8000, temperature: 0.2 },
+    });
+    let data;
+    for (const model of GEMINI_MODELS) {
+      try {
+        data = await aiFetch("Gemini", `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key }, body }, (j) => j.error?.message);
+        break;
+      } catch (e) { if (e.status !== 404 || model === GEMINI_MODELS[GEMINI_MODELS.length - 1]) throw e; }
+    }
+    if (data.promptFeedback?.blockReason) throw new Error("Gemini declined this text");
+    const c = (data.candidates || [])[0];
+    if (!c) throw new Error("Gemini returned no answer");
+    if (c.finishReason === "MAX_TOKENS") throw new Error("The text was too long for one pass");
+    if (c.finishReason && c.finishReason !== "STOP") throw new Error("Gemini declined this text");
+    return JSON.parse((c.content?.parts || []).filter((p) => p.text && !p.thought).map((p) => p.text).join(""));
+  },
+  async groq(key, system, user) {
+    const data = await aiFetch("Groq", "https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: GROQ_MODEL, max_completion_tokens: 8000, temperature: 0.2, reasoning_effort: "low",
+        response_format: { type: "json_schema", json_schema: { name: "tasks", strict: true, schema: AI_SCHEMA } },
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      }),
+    }, (j) => j.error?.message);
+    const c = (data.choices || [])[0];
+    if (!c) throw new Error("Groq returned no answer");
+    if (c.finish_reason === "length") throw new Error("The text was too long for one pass");
+    if (c.message?.refusal) throw new Error("Groq declined this text");
+    return JSON.parse(c.message?.content || "");
+  },
+};
 async function aiSplit(text, meeting) {
-  const key = lsGet(AI_KEY);
+  const provider = aiProvider(), key = aiKey();
   if (!key) throw new Error("No API key is saved yet");
   const now = new Date();
   const projects = db.projects.filter((p) => !isClosedProject(p)).map((p) => ({ id: p.id, name: p.name, phases: phasesOf(p.id).map((ph) => ({ id: ph.id, name: ph.name })) }));
@@ -1948,30 +2049,8 @@ async function aiSplit(text, meeting) {
     "- notes: any useful context from the text that does not fit the title, or an empty string.",
     "- Ignore filler words and small talk. Do not invent tasks that were not asked for.",
   ].join("\n");
-  let res;
-  try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({
-        model: AI_MODEL, max_tokens: 8000, system,
-        output_config: { effort: "low", format: { type: "json_schema", schema: AI_SCHEMA } },
-        messages: [{ role: "user", content: `Projects and phases (JSON):\n${JSON.stringify(projects)}\n\nNotes:\n${text}` }],
-      }),
-    });
-  } catch (e) {
-    throw new Error("Could not reach Claude. Check your internet connection (the claude.ai preview also blocks this; use the downloaded file)");
-  }
-  if (!res.ok) {
-    let msg = ""; try { msg = (await res.json()).error?.message || ""; } catch (e) { /* not JSON */ }
-    if (res.status === 401 || res.status === 403) throw new Error("Claude rejected the API key. Check it under Data & backup");
-    if (res.status === 429) throw new Error("Claude is rate limiting this key right now");
-    throw new Error(`Claude returned an error (${res.status})${msg ? ": " + msg : ""}`);
-  }
-  const data = await res.json();
-  if (data.stop_reason === "refusal") throw new Error("Claude declined this text");
-  if (data.stop_reason === "max_tokens") throw new Error("The text was too long for one pass");
-  const out = JSON.parse((data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""));
+  const user = `Projects and phases (JSON):\n${JSON.stringify(projects)}\n\nNotes:\n${text}`;
+  const out = await AI_CALLS[provider](key, system, user);
   return (out.tasks || []).map((t) => {
     const proj = projById(t.projectId);
     const projectId = proj && !isClosedProject(proj) ? proj.id : smart.projectId || null;
@@ -2005,7 +2084,7 @@ function openSmartAdd(preset = {}) {
       <label class="field"><span>Meeting</span><input class="inp" id="sa-meeting" placeholder="Pharmacy leadership huddle" autocomplete="off"></label>` : `<p class="hint" style="margin:0">${smart.today ? "Tasks without a date go on today's calendar and in My Day. Say a time, like \"at 2 pm\", to give one a slot. " : ""}Type or speak everything on your mind. It is split into separate tasks with their own due dates, and you can check them before anything is saved.</p>`}
       <div class="seg" role="radiogroup" aria-label="How to split">
         <label><input type="radio" name="samode" value="builtin" data-smode ${smartMode() === "builtin" ? "checked" : ""}><span>Built-in (offline)</span></label>
-        <label><input type="radio" name="samode" value="ai" data-smode ${smartMode() === "ai" ? "checked" : ""}><span>${I.spark}AI (Claude)</span></label>
+        <label><input type="radio" name="samode" value="ai" data-smode ${smartMode() === "ai" ? "checked" : ""}><span>${I.spark}AI (${esc(aiProv().label)})</span></label>
       </div>
       <div id="sa-ai-note" class="hint"></div>
       <textarea class="inp" id="sa-text" rows="${smart.meeting ? 9 : 5}" ${smart.meeting ? "" : "autofocus"} placeholder="${esc(smart.meeting ? MEETING_SAMPLE : SAMPLE)}"></textarea>
@@ -2032,9 +2111,10 @@ function openSmartAdd(preset = {}) {
 function updateAiNote() {
   const el = $("#sa-ai-note"); if (!el) return;
   if (smartMode() !== "ai") { el.innerHTML = "Works fully offline. Understands dates like tomorrow, Friday, next week, in 3 days and Oct 20, times like 9-10am, repeats like daily or every Monday and Wednesday, plus effort, priority, #tags and @project."; return; }
-  el.innerHTML = lsGet(AI_KEY)
-    ? `AI mode sends this text and your project names to Anthropic's Claude API using your own key. The key stays in this browser. If Claude can't be reached, the built-in splitter is used instead.`
-    : `<b>No API key saved yet.</b> Add your Anthropic API key under <button type="button" class="linkish" data-act="nav" data-view="data">Data &amp; backup</button> to use AI mode. Until then the built-in splitter is used.`;
+  const pv = aiProv(), change = `<button type="button" class="linkish" data-act="nav" data-view="data">Data &amp; backup</button>`;
+  el.innerHTML = aiKey()
+    ? `AI mode sends this text and your project names to ${esc(pv.label)} using your own key. The key stays in this browser. If ${esc(pv.label)} can't be reached, the built-in splitter is used instead. Change the AI service under ${change}.`
+    : `<b>No ${esc(pv.label)} API key saved yet.</b> Add a key (Gemini and Groq have free tiers) under ${change} to use AI mode. Until then the built-in splitter is used.`;
 }
 function smartStatus(msg, isError) {
   const el = $("#sa-status"); if (!el) return;
@@ -2070,9 +2150,10 @@ async function runSmartSplit() {
   smart.busy = true;
   const btn = $("#sa-split"); btn.disabled = true;
   let items, note = "";
-  if (smartMode() === "ai" && lsGet(AI_KEY)) {
-    smartStatus("Asking Claude to split your notes…");
-    try { items = await aiSplit(text, smart.meeting); note = smart.meeting ? "Action items found by Claude. Check the owners and dates, then add." : "Split by Claude. Check the details, then add."; }
+  if (smartMode() === "ai" && aiKey()) {
+    const name = aiProv().label;
+    smartStatus(`Asking ${name} to split your notes…`);
+    try { items = await aiSplit(text, smart.meeting); note = smart.meeting ? `Action items found by ${name}. Check the owners and dates, then add.` : `Split by ${name}. Check the details, then add.`; }
     catch (e) { items = smart.meeting ? meetingSplit(text) : ruleSplit(text); note = `${e.message}. Used the built-in splitter instead.`; }
   } else {
     items = smart.meeting ? meetingSplit(text) : ruleSplit(text);
@@ -3102,7 +3183,7 @@ const actions = {
   "smart-sample": () => { $("#sa-text").value = smart.meeting ? MEETING_SAMPLE : SAMPLE; if (smart.meeting && !$("#sa-meeting").value) $("#sa-meeting").value = "Pharmacy leadership huddle"; runSmartSplit(); },
   "smart-save": () => saveSmartItems(),
   "smart-remove": (el) => { smart.items.splice(Number(el.dataset.i), 1); renderSmartPreview(); },
-  "ai-remove-key": () => { lsSet(AI_KEY, ""); render(); toast("API key removed from this browser"); },
+  "ai-remove-key": (el) => { const pv = AI_PROVIDERS[el.dataset.provider] || AI_PROVIDERS.anthropic; lsSet(pv.key, ""); render(); toast(`${pv.label} key removed from this browser`); },
   "add-task-phase": (el) => openQuickAdd({ projectId: el.dataset.project, phaseId: el.dataset.phase }),
   "toggle-done": (el) => {
     const t = taskById(el.dataset.id); if (!t) return;
@@ -3295,10 +3376,13 @@ const forms = {
     sync.ready = true; render(); syncPull().then(() => { if (sync.state === "saved") toast("Auto-save is on"); });
   },
   "ai-key": (form) => {
+    const id = AI_PROVIDERS[form.dataset.provider] ? form.dataset.provider : "anthropic", pv = AI_PROVIDERS[id];
     const k = form.aiKey.value.trim();
     if (!k) { toast("Paste your API key first."); return; }
-    if (!lsSet(AI_KEY, k)) { toast("This browser is blocking storage, so the key can't be saved."); return; }
-    render(); toast("API key saved in this browser");
+    const switchTo = !aiKey(); // nothing usable yet: start using the key just saved
+    if (!lsSet(pv.key, k)) { toast("This browser is blocking storage, so the key can't be saved."); return; }
+    if (switchTo) { lsSet(AI_PROVIDER, id); lsSet(AI_MODE, "ai"); }
+    render(); toast(`${pv.label} key saved in this browser${switchTo ? `. Smart add now uses ${pv.label}` : ""}`);
   },
   "quick-add": (form) => {
     const f = quickAddFields();
@@ -3403,6 +3487,7 @@ document.addEventListener("change", (e) => {
   if (el.dataset.pay) return payField(el);
   if (el.dataset.bset) { const k = el.dataset.bset; saveBriefSettings({ [k]: k === "listen" ? el.checked : k === "rate" ? Number(el.value) : el.value, ...(k === "time" ? { lastReminded: "" } : {}) }); toast(k === "time" ? (el.value ? `Briefing reminder set for ${fmtTime(el.value)}` : "Briefing reminder turned off") : "Saved"); return; }
   if (el.hasAttribute("data-smode")) { lsSet(AI_MODE, el.value); updateAiNote(); return; }
+  if (el.hasAttribute("data-aiprov")) { lsSet(AI_PROVIDER, el.value); render(); toast(`Smart add will use ${AI_PROVIDERS[el.value].label}${lsGet(AI_PROVIDERS[el.value].key) ? "" : ". Save its key below"}`); return; }
   if (el.id === "sa-project" || el.id === "sa-phase") {
     if (el.id === "sa-project") { smart.projectId = el.value; smart.phaseId = ""; fillPhaseSelect($("#sa-phase"), el.value, ""); }
     else smart.phaseId = el.value;

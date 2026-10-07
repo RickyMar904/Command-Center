@@ -48,4 +48,7 @@ The first time, whatever is on that device is uploaded and the database table is
 
 ## API keys
 
-The optional Anthropic (AI mode) and ElevenLabs (briefing voice) keys are entered inside the app and kept only in your browser. They are never included in backups or auto-save, and must never be committed to this repository. The same goes for `SYNC_PASSCODE` and `DATABASE_URL`: they live only in Vercel's settings.
+Smart add and Meeting notes can use one of three AI services. Gemini (key from aistudio.google.com) and Groq (key from console.groq.com/keys) have free tiers; Claude (console.anthropic.com) is paid. Saving a key when no other key is saved switches Smart add to that service.
+
+
+The optional AI keys for Smart add (Claude, Gemini or Groq, picked under **Data & backup → AI for Smart add**) and the ElevenLabs (briefing voice) key are entered inside the app and kept only in your browser. They are never included in backups or auto-save, and must never be committed to this repository. The same goes for `SYNC_PASSCODE` and `DATABASE_URL`: they live only in Vercel's settings.
