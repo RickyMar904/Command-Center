@@ -349,6 +349,8 @@ table.dt th:first-child, table.dt td:first-child { text-align: left; }
 .punch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .punch .inp { width: 118px; padding: 4px 7px; font-size: 13px; }
 .punch .inp.brk { width: 70px; }
+.punch.long .num, .punch .long-note { color: var(--danger); }
+.punch .long-note { width: 100%; }
 .pay-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .pay-table th, .pay-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: top; white-space: nowrap; }
 .pay-table th { font-size: 12px; color: var(--muted-fg); font-weight: 500; }
@@ -2745,6 +2747,8 @@ const hmOf = (iso) => { const x = new Date(iso); return `${pad(x.getHours())}:${
 function fmtHours(h) { const m = Math.round(h * 60); return `${Math.floor(m / 60)}h ${pad(m % 60)}m`; }
 function punchHours(x, now = Date.now()) { const end = x.out ? new Date(x.out).getTime() : now; return Math.max(0, (end - new Date(x.in).getTime()) / 36e5 - (x.breakMin || 0) / 60); }
 function dayHours(d) { return db.pay.punches.filter((x) => x.date === d).reduce((s, x) => s + punchHours(x), 0); }
+/** A punch longer than this (hours) is flagged as a likely missed clock-out. */
+const LONG_SHIFT = 16;
 const openPunch = () => db.pay.punches.find((x) => !x.out) || null;
 function periodStartOf(d) {
   const a = db.pay.periodStart, len = db.pay.periodDays || 14;
@@ -2778,7 +2782,9 @@ function periodStats(start) {
 }
 function punchClock() {
   const op = openPunch();
-  if (op) { op.out = new Date().toISOString(); save(); render(); toast(`Clocked out. ${fmtHours(punchHours(op))} on this punch, ${fmtHours(dayHours(op.date))} today.`); return; }
+  if (op) { op.out = new Date().toISOString(); save(); render();
+    const h = punchHours(op);
+    toast(h > LONG_SHIFT ? `Clocked out after ${fmtHours(h)}. If you forgot to clock out, fix the out time under Time entries.` : `Clocked out. ${fmtHours(h)} on this punch, ${fmtHours(dayHours(op.date))} today.`); return; }
   db.pay.punches.push({ id: uid(), date: today(), in: new Date().toISOString(), out: null, breakMin: 0 });
   save(); render(); toast(`Clocked in at ${fmtTime(hmOf(new Date().toISOString()))}`);
 }
@@ -2802,16 +2808,21 @@ function payField(el) {
     if (Number(v.value) > 0 && db.pay.amount > 0) v.value = (el.value === "hour" ? pp / std : el.value === "shift" ? pp / wd : el.value === "week" ? pp / (db.pay.periodDays / 7) : pp).toFixed(2); return; }
   if (f === "start") { const e = $("#pay-end"); if (el.value) e.value = addDays(el.value, (db.pay.periodDays || 14) - 1); return; }
   const x = db.pay.punches.find((y) => y.id === el.dataset.id); if (!x) return;
-  if (f === "in" && el.value) { const t = atTime(x.date, el.value); x.in = t.toISOString(); if (x.out && new Date(x.out) <= t) x.out = new Date(new Date(x.out).getTime() + 864e5).toISOString(); }
+  if (f === "date" && el.value) { const len = x.out ? new Date(x.out) - new Date(x.in) : 0, t = atTime(el.value, hmOf(x.in)); // move the whole entry, keeping its length
+    x.date = el.value; x.in = t.toISOString(); if (x.out) x.out = new Date(t.getTime() + len).toISOString(); }
+  else if (f === "in" && el.value) { const t = atTime(x.date, el.value); x.in = t.toISOString(); if (x.out && new Date(x.out) <= t) x.out = new Date(new Date(x.out).getTime() + 864e5).toISOString(); }
   else if (f === "out" && el.value) { let t = atTime(x.date, el.value); if (t <= new Date(x.in)) t = new Date(t.getTime() + 864e5); x.out = t.toISOString(); }
   else if (f === "brk") x.breakMin = Math.max(0, Math.round(Number(el.value) || 0));
   save(); render();
 }
-function punchRow(x) {
-  return `<div class="punch"><span class="muted small" style="width:24px">In</span><input class="inp" type="time" data-pay="in" data-id="${x.id}" value="${hmOf(x.in)}" aria-label="Clock-in time">
-    <span class="muted small">Out</span>${x.out ? `<input class="inp" type="time" data-pay="out" data-id="${x.id}" value="${hmOf(x.out)}" aria-label="Clock-out time">` : `<span class="badge s-IN_PROGRESS">On the clock</span>`}
+/** Calendar days between the clock-in date and the clock-out moment (1 for an overnight shift). */
+const outDayGap = (x) => (x.out ? Math.round((toDate(ymd(new Date(x.out))) - toDate(x.date)) / 864e5) : 0);
+function punchRow(x, withDate = false) {
+  const gap = outDayGap(x), long = punchHours(x) > LONG_SHIFT;
+  return `<div class="punch${long ? " long" : ""}">${withDate ? `<input class="inp" type="date" data-pay="date" data-id="${x.id}" value="${esc(x.date)}" aria-label="Date of this time entry">` : ""}<span class="muted small" style="width:24px">In</span><input class="inp" type="time" data-pay="in" data-id="${x.id}" value="${hmOf(x.in)}" aria-label="Clock-in time">
+    <span class="muted small">Out</span>${x.out ? `<input class="inp" type="time" data-pay="out" data-id="${x.id}" value="${hmOf(x.out)}" aria-label="Clock-out time">${gap > 0 ? `<span class="small ${long ? "" : "muted"}" title="Clock-out is on ${esc(fmtDate(ymd(new Date(x.out)), { weekday: "long", month: "short", day: "numeric" }))}">+${gap} day${gap > 1 ? "s" : ""}</span>` : ""}` : `<input class="inp" type="time" data-pay="out" data-id="${x.id}" value="" aria-label="Set a clock-out time" title="Forgot to clock out? Enter the time you stopped"><span class="badge s-IN_PROGRESS">On the clock</span>`}
     <span class="muted small">Break</span><input class="inp brk" type="number" min="0" step="5" data-pay="brk" data-id="${x.id}" value="${x.breakMin || 0}" aria-label="Unpaid break minutes"><span class="muted small">min</span>
-    <b class="num">${esc(fmtHours(punchHours(x)))}</b><button class="icon-btn" data-act="pay-del" data-id="${x.id}" aria-label="Remove this time entry" title="Remove">${I.trash}</button></div>`;
+    <b class="num">${esc(fmtHours(punchHours(x)))}</b><button class="icon-btn" data-act="pay-del" data-id="${x.id}" aria-label="Remove this time entry" title="Remove">${I.trash}</button>${long ? `<span class="small long-note">Over ${LONG_SHIFT} hours. Forgot to clock out? Change the out time.</span>` : ""}</div>`;
 }
 function viewPay() {
   const p = db.pay, td = today(), op = openPunch();
@@ -2826,7 +2837,7 @@ function viewPay() {
   const clock = `<section class="card clock-card">
     <button class="punch-btn ${op ? "out" : ""}" data-act="pay-punch">${I.punch}${op ? "Clock out" : "Clock in"}<small>${op ? `since ${esc(fmtTime(hmOf(op.in)))}` : esc(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }))}</small></button>
     <div><div class="section-label">${op ? "On the clock" : "Today"}</div><div class="clock-big" id="pay-elapsed"></div><div class="muted" id="pay-today"></div>
-      ${op && op.date !== td ? `<p class="small" style="color:var(--danger);margin:6px 0 0">You've been clocked in since ${esc(fmtDate(op.date, { weekday: "long", month: "short", day: "numeric" }))}. Clock out, then fix the out time below.</p>` : ""}
+      ${op && op.date !== td ? `<p class="small" style="color:var(--danger);margin:6px 0 0">You've been clocked in since ${esc(fmtDate(op.date, { weekday: "long", month: "short", day: "numeric" }))}. Type the time you actually stopped in the Out box below.</p>` : ""}
       ${todays.length ? `<div class="punch-list">${todays.map(punchRow).join("")}</div>` : `<p class="hint" style="margin:8px 0 0">Press Clock in when you start. Clock out for lunch and back in after, just like a time clock.</p>`}</div>
   </section>`;
   const setupCard = `<section class="card"><div class="card-h"><h2>Pay setup</h2><span class="muted small">Use your take-home pay after taxes</span></div>
@@ -2843,6 +2854,7 @@ function viewPay() {
       <div class="row"><button class="btn btn-primary" type="submit">Save pay setup</button>${setup ? `<span class="muted small">${money(basePeriodPay(curStart))} per paycheck · ${money(basePeriodPay(curStart) / (p.periodDays / 7))} per week · ${money(basePeriodPay(curStart) / Math.max(1, periodDates(curStart).filter(isWorkday).length))} per shift · ${money(basePeriodPay(curStart) / Math.max(1, periodStdHours(curStart)))} per hour</span>` : ""}</div>
     </form></section>`;
   if (!setup) return clock + setupCard;
+  const periodPunches = p.punches.filter((x) => x.date >= st.start && x.date <= st.end).sort((a, b) => a.in.localeCompare(b.in));
   const rateDrop = st.startRate ? Math.round((1 - st.overRate / st.startRate) * 1000) / 10 : 0;
   return `${clock}
   <section class="card"><div class="card-h"><button class="btn btn-sm" data-act="pay-move" data-n="-1" aria-label="Previous pay period">${I.left}</button>
@@ -2868,6 +2880,9 @@ function viewPay() {
         <td class="money">${x.sd ? money(x.pay) : `<span class="muted">${x.h ? "unpaid" : ""}</span>`}</td>
         <td class="money ${x.h > x.sd ? "rate-down" : ""}">${x.h ? (x.pay ? money(x.pay / (x.d === td ? Math.max(x.h, x.sd) : x.h)) : money(0)) : ""}</td></tr>`; }).join("")}
     </tbody></table></div>
+    ${periodPunches.length ? `<div class="card-b" style="border-top:1px solid var(--border)"><span class="section-label">Time entries this period</span>
+      <div class="punch-list">${periodPunches.map((x) => punchRow(x, true)).join("")}</div>
+      <p class="hint" style="margin:8px 0 0">Change a date, in or out time, or break and the period recalculates. An out time earlier than the in time counts as the next day.</p></div>` : ""}
     <form class="card-b row" data-form="pay-manual" style="border-top:1px solid var(--border);gap:8px;align-items:flex-end">
       <span class="section-label" style="width:100%">Add time by hand</span>
       <label class="field"><span>Date</span><input class="inp" type="date" id="pm-date" value="${esc(td >= st.start && td <= st.end ? td : st.start)}" min="${st.start}" max="${st.end}"></label>
@@ -2876,7 +2891,7 @@ function viewPay() {
       <label class="field" style="width:110px"><span>Break (min)</span><input class="inp" type="number" min="0" step="5" id="pm-brk" value="30"></label>
       <button class="btn" type="submit">${I.plus}Add time</button>
     </form>
-    <div class="card-b hint" style="border-top:1px solid var(--border)">How it works: your take-home pay stays the same however long you work, so every hour over your standard day spreads it thinner. Rate with overtime = period pay ÷ (standard hours + hours over). Edit any punch above to correct it; changes recalculate right away.</div>
+    <div class="card-b hint" style="border-top:1px solid var(--border)">How it works: your take-home pay stays the same however long you work, so every hour over your standard day spreads it thinner. Rate with overtime = period pay ÷ (standard hours + hours over). Edit any entry under Time entries to correct it; changes recalculate right away.</div>
   </section>
   ${setupCard}`;
 }
